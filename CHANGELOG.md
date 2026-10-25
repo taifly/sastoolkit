@@ -3,15 +3,6 @@
 All notable changes to SAS toolkit are listed here. Versions follow
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
-
-### Added
-
-- API docs: `docs/API.md` (the app's HTTP API) and `docs/SAS4_API.md` (the
-  SAS4 API, with every request in the collection marked as used or not).
-- New app icon.
-- GitHub release workflow: a version tag builds macOS, Windows and Linux.
-
 ## [1.0.0] - 2026-10-25
 
 First release.
@@ -31,3 +22,7 @@ First release.
 - Reports: active, new and expired users per day, week or month, and each
   user's last session, with CSV and XLSX export.
 - Native Save dialog for downloads in the desktop window.
+- API docs: `docs/API.md` (the app's HTTP API) and `docs/SAS4_API.md` (the
+  SAS4 API, with every request in the collection marked as used or not).
+- App icon.
+- GitHub release workflow: a version tag builds macOS, Windows and Linux.
