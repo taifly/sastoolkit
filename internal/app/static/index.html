@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SAS toolkit</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">SAS toolkit</div>
+  <div class="host" id="host"></div>
+  <nav class="views" id="views" hidden>
+    <button class="view active" data-view="ops">Operations</button>
+    <button class="view" data-view="reports">Reports</button>
+  </nav>
+  <div class="spacer"></div>
+  <div class="dir" id="dir-status" hidden></div>
+  <button class="ghost" id="dir-refresh" hidden title="Re-read users and managers from SAS4">Refresh list</button>
+  <div class="who" id="who"></div>
+  <button class="ghost" id="logout" hidden>Log out</button>
+  <div class="loadbar" id="loadbar" hidden><div></div></div>
+</header>
+
+<!-- LOGIN -->
+<main id="login-view" class="login" hidden>
+  <form id="login-form" class="card login-card">
+    <h1>Sign in to SAS4</h1>
+    <label>System URL
+      <input name="url" id="login-url" type="text" inputmode="url" autocomplete="url"
+             placeholder="https://bss.libonet.ly" spellcheck="false" required>
+      <span class="hint" id="login-url-hint"></span>
+    </label>
+    <label>Manager username<input name="username" autocomplete="username" required autofocus></label>
+    <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit" class="primary">Sign in</button>
+    <p class="error" id="login-error" hidden></p>
+  </form>
+</main>
+
+<!-- APP -->
+<main id="app-view" class="app" hidden>
+
+  <nav class="ops card" id="ops"></nav>
+
+  <section class="select card">
+    <div class="section-head">
+      <h2 id="select-title">Select users</h2>
+      <div class="tabs" id="tabs">
+        <button data-tab="filter" class="tab active">Filter</button>
+        <button data-tab="import" class="tab">Import CSV</button>
+      </div>
+    </div>
+
+    <!-- user filters -->
+    <div id="tab-filter">
+      <div id="user-filters" class="filters">
+        <div class="field wide">
+          <span>Profiles</span>
+          <div class="picker" id="profile-picker">
+            <input type="search" placeholder="Search profiles…" id="profile-search">
+            <div class="picker-list" id="profile-list"></div>
+          </div>
+        </div>
+        <div class="field">
+          <span>Manager</span>
+          <select id="f-manager"><option value="">Any manager</option></select>
+        </div>
+        <div class="field">
+          <span>Status</span>
+          <div class="checks" id="f-status">
+            <label><input type="checkbox" value="active"> Active</label>
+            <label><input type="checkbox" value="expired"> Expired</label>
+            <label><input type="checkbox" value="disabled"> Disabled</label>
+            <label><input type="checkbox" value="online"> Online</label>
+          </div>
+        </div>
+        <div class="field">
+          <span>Search</span>
+          <input type="search" id="f-search" placeholder="username, name, phone">
+        </div>
+        <div class="field">
+          <span>Expires from</span>
+          <input type="date" id="f-from">
+        </div>
+        <div class="field">
+          <span>Expires to</span>
+          <input type="date" id="f-to">
+        </div>
+      </div>
+      <div id="manager-filters" class="filters" hidden>
+        <div class="field wide">
+          <span>Search managers</span>
+          <input type="search" id="m-search" placeholder="username or name">
+        </div>
+      </div>
+      <div class="load-panel" id="load-panel" hidden>
+        <div class="load-text"><b id="load-count"></b><span class="muted" id="load-eta"></span></div>
+        <div class="bar big-bar"><div id="load-fill"></div></div>
+      </div>
+      <div class="table-bar">
+        <div id="match-count" class="muted"></div>
+        <div class="spacer"></div>
+        <details class="colpick" id="exportpick">
+          <summary>Export</summary>
+          <div class="colpick-panel export-panel">
+            <p id="export-scope" class="muted"></p>
+            <label class="inline"><input type="radio" name="export-cols" value="visible" checked> Visible columns</label>
+            <label class="inline"><input type="radio" name="export-cols" value="all"> All fields</label>
+            <div class="colpick-actions">
+              <button type="button" class="primary" data-format="xlsx">Excel (.xlsx)</button>
+              <button type="button" data-format="csv">CSV</button>
+            </div>
+            <p class="error" id="export-error" hidden></p>
+          </div>
+        </details>
+        <details class="colpick" id="colpick">
+          <summary>Columns</summary>
+          <div class="colpick-panel">
+            <div class="colpick-actions">
+              <button type="button" id="cols-default">Defaults</button>
+              <button type="button" id="cols-all">All</button>
+              <button type="button" id="cols-none">Username only</button>
+            </div>
+            <div class="colpick-list" id="colpick-list"></div>
+          </div>
+        </details>
+        <label class="inline"><input type="radio" name="scope" value="all" checked> All matching</label>
+        <label class="inline"><input type="radio" name="scope" value="ticked"> Only ticked (<span id="ticked-count">0</span>)</label>
+      </div>
+      <div class="table-wrap"><table id="rows"><thead></thead><tbody></tbody></table></div>
+      <div class="pager" id="pager"></div>
+    </div>
+
+    <!-- server-side bulk change -->
+    <div id="tab-bulk" hidden>
+      <p class="muted">Users matching <b>all</b> of these conditions. SAS4 applies the action itself, in one request.</p>
+      <div id="bulk-rows" class="bulk-rows"></div>
+      <div class="import-row">
+        <button type="button" id="bulk-add">+ Condition</button>
+        <button type="button" id="bulk-preview" class="primary">Preview matching users</button>
+      </div>
+      <div id="bulk-result"></div>
+    </div>
+
+    <!-- import -->
+    <div id="tab-import" hidden>
+      <p class="muted" id="import-help"></p>
+      <form id="import-form" class="import-row">
+        <input type="file" id="import-file" accept=".csv,.txt,text/csv" required>
+        <button type="submit">Upload</button>
+      </form>
+      <div id="import-result"></div>
+    </div>
+  </section>
+
+  <section class="action card">
+    <h2 id="op-title"></h2>
+    <p class="muted" id="op-help"></p>
+    <p class="warn" id="op-warn" hidden></p>
+    <form id="op-form" class="op-form"></form>
+    <div class="run-opts" id="run-opts">
+      <label class="switch"><input type="checkbox" id="dry-run" checked> Dry run (send nothing)</label>
+      <label class="inline">Parallel requests <input type="number" id="workers" min="1" max="16" value="4"></label>
+    </div>
+    <div class="selection-summary" id="selection-summary"></div>
+    <button class="primary big" id="run">Run</button>
+    <p class="error" id="run-error" hidden></p>
+  </section>
+
+  <section class="jobs card">
+    <div class="section-head"><h2>Jobs</h2></div>
+    <div id="jobs"><p class="muted">No jobs yet.</p></div>
+  </section>
+</main>
+
+<!-- REPORTS -->
+<main id="reports-view" class="reports" hidden>
+  <nav class="tabs report-tabs" id="report-tabs">
+    <button class="tab active" data-report="activity">Users over time</button>
+    <button class="tab" data-report="sessions">Last session</button>
+  </nav>
+
+  <div id="rep-activity" class="reports-pane">
+  <section class="card report-controls">
+    <label class="field"><span>Group by</span>
+      <select id="r-period">
+        <option value="day">Day</option>
+        <option value="week">Week</option>
+        <option value="month">Month</option>
+      </select>
+    </label>
+    <label class="field"><span>From</span><input type="date" id="r-from"></label>
+    <label class="field"><span>To</span><input type="date" id="r-to"></label>
+    <label class="field"><span>Profile</span><select id="r-profile"><option value="">All profiles</option></select></label>
+    <label class="field"><span>Manager</span><select id="r-manager"><option value="">All managers</option></select></label>
+    <div class="report-actions">
+      <button class="primary" id="r-run">Show report</button>
+      <button id="r-xlsx" disabled>Excel</button>
+      <button id="r-csv" disabled>CSV</button>
+    </div>
+  </section>
+  <p class="error" id="r-error" hidden></p>
+  <p class="muted" id="r-wait" hidden>Reports are available once the user list has finished loading.</p>
+
+  <div id="r-body" hidden>
+    <section class="kpis" id="r-kpis"></section>
+
+    <section class="card chart-card">
+      <h2>Active users at the end of each period</h2>
+      <p class="muted small">Estimated from each user's current creation and expiry dates. SAS4 keeps no expiry history,
+        so a user who lapsed and later renewed counts as active in between. Disabled users are not counted.</p>
+      <div class="chart" id="r-active-chart"></div>
+    </section>
+
+    <section class="card chart-card">
+      <h2>New and expired users per period</h2>
+      <div class="legend" id="r-flow-legend"></div>
+      <div class="chart" id="r-flow-chart"></div>
+    </section>
+
+    <section class="card">
+      <h2>Table</h2>
+      <div class="table-wrap report-table"><table id="r-table"><thead></thead><tbody></tbody></table></div>
+      <p class="muted small" id="r-foot"></p>
+    </section>
+  </div>
+  </div>
+
+  <div id="rep-sessions" class="reports-pane" hidden>
+    <section class="card report-controls">
+      <label class="field"><span>Look back</span>
+        <select id="ls-lookback">
+          <option value="30">30 days</option>
+          <option value="90" selected>90 days</option>
+          <option value="180">180 days</option>
+          <option value="365">1 year</option>
+          <option value="0">All history</option>
+        </select>
+      </label>
+      <label class="field"><span>Profile</span><select id="ls-profile"><option value="">All profiles</option></select></label>
+      <label class="field"><span>Manager</span><select id="ls-manager"><option value="">All managers</option></select></label>
+      <label class="field"><span>Status</span>
+        <select id="ls-state">
+          <option value="">All</option>
+          <option value="online">Online now</option>
+          <option value="offline">Offline</option>
+          <option value="none">No session in window</option>
+        </select>
+      </label>
+      <label class="field"><span>Search</span><input type="search" id="ls-search" placeholder="Username, name, phone"></label>
+      <div class="report-actions">
+        <button class="primary" id="ls-scan">Scan sessions</button>
+        <button id="ls-xlsx" disabled>Excel</button>
+        <button id="ls-csv" disabled>CSV</button>
+      </div>
+    </section>
+    <p class="error" id="ls-error" hidden></p>
+    <p class="muted" id="ls-wait" hidden>Available once the user list has finished loading.</p>
+    <section class="card load-panel" id="ls-progress" hidden>
+      <div class="load-text"><b>Reading sessions from SAS4…</b><span class="muted" id="ls-progress-text"></span></div>
+      <div class="bar big-bar indeterminate"><div></div></div>
+    </section>
+
+    <div id="ls-body" hidden>
+      <section class="kpis" id="ls-kpis"></section>
+      <section class="card">
+        <div class="table-bar">
+          <h2>Last session per user</h2>
+          <span class="muted small" id="ls-scan-info"></span>
+        </div>
+        <p class="muted small">Click a row to see that user's session history.</p>
+        <div class="table-wrap report-table"><table id="ls-table" class="clickable"><thead></thead><tbody></tbody></table></div>
+        <div class="pager">
+          <span class="muted" id="ls-page-info"></span>
+          <button id="ls-prev">Previous</button>
+          <button id="ls-next">Next</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<dialog id="history" class="wide">
+  <div class="history">
+    <div class="history-head">
+      <div>
+        <h2 id="hist-title"></h2>
+        <div class="muted small" id="hist-sub"></div>
+      </div>
+      <form method="dialog"><button class="ghost" aria-label="Close">Close</button></form>
+    </div>
+    <p class="error" id="hist-error" hidden></p>
+    <div class="table-wrap"><table id="hist-table"><thead></thead><tbody></tbody></table></div>
+    <div class="pager">
+      <span class="muted" id="hist-info"></span>
+      <button id="hist-newer">Newer</button>
+      <button id="hist-older">Older</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="confirm">
+  <form method="dialog" class="confirm">
+    <h2 id="confirm-title"></h2>
+    <div id="confirm-body"></div>
+    <label id="confirm-type-wrap" hidden>Type <b id="confirm-expect"></b> to confirm
+      <input id="confirm-type" autocomplete="off">
+    </label>
+    <div class="confirm-actions">
+      <button value="cancel" class="ghost">Cancel</button>
+      <button value="ok" id="confirm-ok" class="primary">Run</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
