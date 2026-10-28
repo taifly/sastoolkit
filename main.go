@@ -1,6 +1,6 @@
 // SAS toolkit: bulk SAS4 operations, in its own window.
 //
-//	sas-toolkit                                  # https://bss.libonet.ly
+//	sas-toolkit                                  # the login screen asks for the server
 //	sas-toolkit --host demo4.sasradius.com --scheme http
 //	sas-toolkit --web                            # in the browser, as a local server
 //	sas-toolkit --web --bind 0.0.0.0 --port 8765 # reachable from the LAN
@@ -22,8 +22,6 @@ import (
 	"sastoolkit/internal/app"
 )
 
-const defaultHost = "bss.libonet.ly"
-
 type settings struct {
 	host, scheme, bind, reportsDir string
 	insecure, allowUnverified      bool
@@ -35,7 +33,7 @@ type settings struct {
 func main() {
 	var s settings
 	flag.BoolVar(&s.web, "web", false, "run as a local web server and open the browser instead of a window")
-	flag.StringVar(&s.host, "host", defaultHost, "SAS4 server")
+	flag.StringVar(&s.host, "host", "", "SAS4 server the login screen starts with")
 	flag.StringVar(&s.scheme, "scheme", "https", "https or http")
 	flag.BoolVar(&s.insecure, "insecure", false, "skip TLS certificate verification")
 	flag.IntVar(&s.pageSize, "page-size", 500, "users per index/user request when loading")
@@ -74,8 +72,12 @@ func main() {
 }
 
 func (s settings) config() app.Config {
+	base := ""
+	if s.host != "" {
+		base = s.scheme + "://" + s.host
+	}
 	return app.Config{
-		BaseURL:         s.scheme + "://" + s.host,
+		BaseURL:         base,
 		Insecure:        s.insecure,
 		AllowUnverified: s.allowUnverified,
 		PageSize:        s.pageSize,
@@ -90,6 +92,10 @@ func runWeb(s settings) {
 	local := s.bind == "127.0.0.1" || s.bind == "localhost" || s.bind == "::1"
 	cfg := s.config()
 	cfg.AllowURLChange = !s.lockURL && (local || s.allowURLChange)
+	if !cfg.AllowURLChange && s.host == "" {
+		log.Fatal("--host is required when the login screen is locked to one " +
+			"system (--lock-url, or --bind without --allow-url-change)")
+	}
 	handler := app.New(cfg)
 
 	shown := s.bind
@@ -106,7 +112,11 @@ func runWeb(s settings) {
 			"can log in with a SAS4 account and run bulk actions; traffic to "+
 			"the app is plain HTTP.%s\n", s.bind, locked)
 	}
-	fmt.Printf("SAS toolkit for %s://%s -> %s\n", s.scheme, s.host, url)
+	if s.host != "" {
+		fmt.Printf("SAS toolkit for %s://%s -> %s\n", s.scheme, s.host, url)
+	} else {
+		fmt.Printf("SAS toolkit -> %s\n", url)
+	}
 
 	listener, err := net.Listen("tcp", net.JoinHostPort(s.bind, strconv.Itoa(s.port)))
 	if err != nil {

@@ -26,6 +26,8 @@ All notable changes to SAS toolkit are listed here. Versions follow
 - Users over time and Last session use the shared panel in place of their
   own profile, manager, state and search fields. The old request fields
   (`profiles`, `managers`, `states`) still work.
+- No default SAS4 server. The login screen starts empty unless `--host` is
+  given, and `--host` is required when the login screen is locked.
 
 ### Fixed
 

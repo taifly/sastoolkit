@@ -28,7 +28,7 @@ import (
 const sessionRoute = "index/UserSessions"
 
 // SessionColumns is exactly what the admin GUI's Sessions report asks for
-// (captured on bss.libonet.ly).
+// (captured from a live server).
 var SessionColumns = []string{"username", "acctstarttime", "acctstoptime",
 	"framedipaddress", "nasipaddress", "callingstationid", "acctinputoctets",
 	"acctoutputoctets", "calledstationid", "nasportid", "acctterminatecause"}

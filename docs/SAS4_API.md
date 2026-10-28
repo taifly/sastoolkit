@@ -486,7 +486,7 @@ profile name.
 ## Used by the app, not in the collection
 
 The app also calls these routes. The collection does not describe them. Their
-shapes come from requests the admin GUI sends on bss.libonet.ly, captured
+shapes come from requests the admin GUI sends, captured
 and decrypted.
 
 ### `POST bulkChanges/users/apply`

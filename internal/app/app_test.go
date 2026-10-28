@@ -24,13 +24,13 @@ import (
 	"sastoolkit/internal/sas4"
 )
 
-// Captured from the bss.libonet.ly admin GUI's "Add Traffic".
+// Captured from the SAS4 admin GUI's "Add Traffic".
 const captured = "U2FsdGVkX1/aa4G5MsJpXT4ETVGOSVjLV3Gc3LSd/SR4kAUmS055IkFRwMMjHiNemhzy" +
 	"YKPnySW3L5RDWREEFRJ9rEtUydI3Vhr+Yfpsf1ZWSUpBiyNwv+dern080WokZlTRuUX2" +
 	"FZhCaQbBDqBBx/aqHegg1IF3qllWK3ygoKjdkSXO9jdZimZKZnG9gwR3DSWN+XAA6/Z/" +
 	"4dIg+fMoRA=="
 
-// Captured from the bss.libonet.ly Bulk Changes screen.
+// Captured from the SAS4 admin GUI's Bulk Changes screen.
 const capturedBulk = "U2FsdGVkX1+taZG4JNzGUA9fxAKj6nWqJ8UQEa/x0am2z7Vt9T0Zw/3t9lcz3jykWSCqV+kI" +
 	"gVmk3JxfK1FxxCCamqiUPgaIHjhvYVxHRC+YWbGWC4qWhIrRBDbzJ61/reBqJo0nh8dDNnlD" +
 	"coSFH88AClji5N1+cvFw3gkhlHFBT50jfyR4lG/FXc/J3NvQfsJJ17tKBsoO71boodX0+deu" +
@@ -814,13 +814,22 @@ func TestBadOrLockedURLIsRefused(t *testing.T) {
 		"url": fake.URL() + "/"}).code, 200, "same host")
 }
 
+func TestLoginNeedsAURLWithoutADefault(t *testing.T) {
+	fake := newFake(t)
+	h := newHarness(t, fake, Config{AllowURLChange: true})
+	eq(t, h.get("/api/session").json["default_host"], any(""), "default")
+	eq(t, h.post("/api/login", M{"username": "admin", "password": "secret"}).code, 422, "no url")
+	eq(t, h.post("/api/login", M{"username": "admin", "password": "secret",
+		"url": fake.URL()}).code, 200, "typed url")
+}
+
 func TestNormaliseURL(t *testing.T) {
 	for in, want := range map[string]string{
-		"bss.libonet.ly":                 "https://bss.libonet.ly",
-		"https://bss.libonet.ly/#/login": "https://bss.libonet.ly",
-		"http://10.0.0.5:8080/admin/":    "http://10.0.0.5:8080",
-		"HTTP://Example.COM":             "http://example.com",
-		"http://[::1]:9000/x":            "http://[::1]:9000",
+		"sas.example.com":                 "https://sas.example.com",
+		"https://sas.example.com/#/login": "https://sas.example.com",
+		"http://10.0.0.5:8080/admin/":     "http://10.0.0.5:8080",
+		"HTTP://Example.COM":              "http://example.com",
+		"http://[::1]:9000/x":             "http://[::1]:9000",
 	} {
 		got, err := NormaliseURL(in)
 		eq(t, err, nil, in)

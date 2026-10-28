@@ -115,7 +115,7 @@ capped at 500.
 ### `POST /api/login`
 
 ```json
-{"username": "manager", "password": "<password>", "url": "bss.libonet.ly"}
+{"username": "manager", "password": "<password>", "url": "sas.example.com"}
 ```
 
 `url` is optional, and defaults to `--host`. It is reduced to
@@ -138,7 +138,7 @@ Ends the session and clears the cookie. Answer: `{"ok": true}`.
 Works without a session.
 
 ```json
-{"logged_in": true, "host": "https://bss.libonet.ly", "default_host": "...",
+{"logged_in": true, "host": "https://sas.example.com", "default_host": "...",
  "allow_url_change": true, "username": "manager", "allow_unverified": false,
  "desktop": true}
 ```

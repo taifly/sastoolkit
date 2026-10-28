@@ -27,7 +27,7 @@ import (
 type M = val.M
 
 // UserColumns is exactly what the admin GUI's user list asks for (captured
-// on bss.libonet.ly), so the server returns every column the GUI can show.
+// from a live server), so the server returns every column the GUI can show.
 var UserColumns = []string{"n_row", "idx", "id", "username", "firstname",
 	"lastname", "expiration", "parent_username", "name", "balance",
 	"loan_balance", "group_name", "traffic", "city", "remaining_days",

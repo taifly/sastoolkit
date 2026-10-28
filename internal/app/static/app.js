@@ -319,7 +319,7 @@ function setupUrlField(info) {
   } else {
     input.value = last || info.default_host;
     input.readOnly = false;
-    hint.textContent = "The address you open SAS4 admin at, e.g. https://bss.libonet.ly";
+    hint.textContent = "The address you open SAS4 admin at, e.g. https://sas.example.com";
   }
 }
 

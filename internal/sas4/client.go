@@ -93,7 +93,7 @@ type Client struct {
 	loginMu sync.Mutex
 }
 
-// New takes base_url as 'https://bss.libonet.ly' -- scheme and host only.
+// New takes base_url as 'https://sas.example.com' -- scheme and host only.
 func New(baseURL, username, password string, opt Options) *Client {
 	if opt.ConnectTimeout == 0 {
 		opt.ConnectTimeout = 10 * time.Second

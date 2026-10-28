@@ -7,7 +7,7 @@ package app
 //	apply    POST bulkChanges/users/apply  {"filter": [...], "action": {...}}
 //
 // Not in the developer collection. The shapes come from a request captured on
-// bss.libonet.ly, which decrypts to
+// a live SAS4 server, which decrypts to
 //
 //	{"filter": [{"key": "profile_id", "op": "=", "value": 14,
 //	             "value_label": "flat-Old", "id": "<uuid>"}],

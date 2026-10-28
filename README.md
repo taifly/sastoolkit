@@ -87,7 +87,7 @@ Run the app from a terminal to pass flags:
 
 | Flag | Meaning |
 |---|---|
-| `--host other.server.ly` | The system URL the login screen starts with (default `bss.libonet.ly`) |
+| `--host other.server.ly` | The system URL the login screen starts with (no default: the login screen starts empty) |
 | `--scheme http` | For a server without HTTPS |
 | `--insecure` | Skip TLS certificate checks (self-signed certificates) |
 | `--page-size 500` | Users per `index/user` request when loading |

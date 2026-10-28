@@ -95,7 +95,7 @@ type loginBody struct {
 // NormaliseURL reduces what someone types or pastes to
 // 'https://host[:port]'.
 //
-// 'bss.libonet.ly', 'https://bss.libonet.ly/#/login' and
+// 'sas.example.com', 'https://sas.example.com/#/login' and
 // 'http://10.0.0.5:8080/admin/' all reduce to scheme + host, since the API
 // path is added by the client. No scheme means https.
 func NormaliseURL(raw string) (string, error) {
@@ -719,6 +719,9 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) error {
 			return fail(403, "this app is locked to %s", a.cfg.BaseURL)
 		}
 		target = u
+	}
+	if target == "" {
+		return fail(422, "the system URL is required")
 	}
 	client := sas4.New(target, *body.Username, *body.Password, a.cfg.ClientOptions)
 	if err := client.Login(); err != nil {

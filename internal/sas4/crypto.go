@@ -11,7 +11,7 @@ import (
 )
 
 // APISecret is the shipped default -- confirmed by decrypting a request
-// captured from bss.libonet.ly.
+// captured from a live SAS4 server.
 const APISecret = "abcdefghijuklmno0123456789012345"
 
 func evpKDF(passphrase, salt []byte) (key, iv []byte) {
