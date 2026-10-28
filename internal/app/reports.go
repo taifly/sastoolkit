@@ -60,9 +60,7 @@ func reportDT(v any) (time.Time, bool) {
 }
 
 type reportUser struct {
-	profile    int
-	hasProfile bool
-	manager    string
+	id         int
 	enabled    bool
 	created    time.Time
 	hasCreated bool
@@ -84,8 +82,7 @@ func (d *Directory) parsedUsers() []reportUser {
 	rows := make([]reportUser, 0, len(users))
 	for _, u := range users {
 		var r reportUser
-		r.profile, r.hasProfile = val.Int(u["profile_id"])
-		r.manager = val.Fold(val.Str(u["parent_username"]))
+		r.id, _ = val.Int(u["user_id"])
 		r.enabled = val.Str(u["enabled"]) == "1"
 		r.created, r.hasCreated = reportDT(u["created_at"])
 		r.expires, r.hasExpires = reportDT(u["expiration"])
@@ -141,8 +138,10 @@ func countUpTo(sorted []time.Time, moment time.Time) int {
 	return sort.Search(len(sorted), func(i int) bool { return sorted[i].After(moment) })
 }
 
+// BuildReport counts the users in keep (by user_id), or everyone when keep
+// is nil; App.filterUsers picks them.
 func BuildReport(d *Directory, period string, dateFrom, dateTo *string,
-	profiles []int, managers []string, now time.Time) (M, error) {
+	keep map[int]bool, now time.Time) (M, error) {
 	known := false
 	for _, p := range periods {
 		known = known || p == period
@@ -180,23 +179,11 @@ func BuildReport(d *Directory, period string, dateFrom, dateTo *string,
 		start = next
 	}
 
-	wantedProfiles := map[int]bool{}
-	for _, p := range profiles {
-		wantedProfiles[p] = true
-	}
-	wantedManagers := map[string]bool{}
-	for _, m := range managers {
-		wantedManagers[val.Fold(m)] = true
-	}
 	var users []reportUser
 	for _, u := range d.parsedUsers() {
-		if len(wantedProfiles) > 0 && !(u.hasProfile && wantedProfiles[u.profile]) {
-			continue
+		if keep == nil || keep[u.id] {
+			users = append(users, u)
 		}
-		if len(wantedManagers) > 0 && !wantedManagers[u.manager] {
-			continue
-		}
-		users = append(users, u)
 	}
 
 	rangeStart, rangeEnd := bounds[0].start, bounds[len(bounds)-1].next

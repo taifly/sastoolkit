@@ -117,6 +117,12 @@ label.switch { display: inline-flex; align-items: center; gap: 8px; font-weight:
 .field { display: grid; gap: 4px; align-content: start; }
 .field > span { font-size: 12px; color: var(--muted); }
 .field.wide { grid-column: 1 / -1; }
+.bulk-extra { margin: 8px 0; }
+.session-filters { margin-bottom: 10px; }
+.session-filters > summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+.range { display: flex; gap: 4px; align-items: center; }
+.range input { width: 0; flex: 1; min-width: 60px; }
+.report-filters { padding-bottom: 0; }
 .checks { display: flex; flex-wrap: wrap; gap: 4px 10px; }
 .checks label { display: inline-flex; gap: 4px; align-items: center; }
 .picker { border: 1px solid var(--line); border-radius: 6px; padding: 6px; display: grid; gap: 6px; }

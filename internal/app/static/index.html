@@ -55,40 +55,7 @@
 
     <!-- user filters -->
     <div id="tab-filter">
-      <div id="user-filters" class="filters">
-        <div class="field wide">
-          <span>Profiles</span>
-          <div class="picker" id="profile-picker">
-            <input type="search" placeholder="Search profiles…" id="profile-search">
-            <div class="picker-list" id="profile-list"></div>
-          </div>
-        </div>
-        <div class="field">
-          <span>Manager</span>
-          <select id="f-manager"><option value="">Any manager</option></select>
-        </div>
-        <div class="field">
-          <span>Status</span>
-          <div class="checks" id="f-status">
-            <label><input type="checkbox" value="active"> Active</label>
-            <label><input type="checkbox" value="expired"> Expired</label>
-            <label><input type="checkbox" value="disabled"> Disabled</label>
-            <label><input type="checkbox" value="online"> Online</label>
-          </div>
-        </div>
-        <div class="field">
-          <span>Search</span>
-          <input type="search" id="f-search" placeholder="username, name, phone">
-        </div>
-        <div class="field">
-          <span>Expires from</span>
-          <input type="date" id="f-from">
-        </div>
-        <div class="field">
-          <span>Expires to</span>
-          <input type="date" id="f-to">
-        </div>
-      </div>
+      <div id="user-filters"></div>
       <div id="manager-filters" class="filters" hidden>
         <div class="field wide">
           <span>Search managers</span>
@@ -137,6 +104,10 @@
     <div id="tab-bulk" hidden>
       <p class="muted">Users matching <b>all</b> of these conditions. SAS4 applies the action itself, in one request.</p>
       <div id="bulk-rows" class="bulk-rows"></div>
+      <div class="bulk-extra">
+        <p class="muted">Extra filters, checked by this app. When any is set, the action is sent one user at a time to the users that match both.</p>
+        <div id="bulk-filters"></div>
+      </div>
       <div class="import-row">
         <button type="button" id="bulk-add">+ Condition</button>
         <button type="button" id="bulk-preview" class="primary">Preview matching users</button>
@@ -193,14 +164,13 @@
     </label>
     <label class="field"><span>From</span><input type="date" id="r-from"></label>
     <label class="field"><span>To</span><input type="date" id="r-to"></label>
-    <label class="field"><span>Profile</span><select id="r-profile"><option value="">All profiles</option></select></label>
-    <label class="field"><span>Manager</span><select id="r-manager"><option value="">All managers</option></select></label>
     <div class="report-actions">
       <button class="primary" id="r-run">Show report</button>
       <button id="r-xlsx" disabled>Excel</button>
       <button id="r-csv" disabled>CSV</button>
     </div>
   </section>
+  <section class="card report-filters"><div id="r-filters"></div></section>
   <p class="error" id="r-error" hidden></p>
   <p class="muted" id="r-wait" hidden>Reports are available once the user list has finished loading.</p>
 
@@ -239,23 +209,13 @@
           <option value="0">All history</option>
         </select>
       </label>
-      <label class="field"><span>Profile</span><select id="ls-profile"><option value="">All profiles</option></select></label>
-      <label class="field"><span>Manager</span><select id="ls-manager"><option value="">All managers</option></select></label>
-      <label class="field"><span>Status</span>
-        <select id="ls-state">
-          <option value="">All</option>
-          <option value="online">Online now</option>
-          <option value="offline">Offline</option>
-          <option value="none">No session in window</option>
-        </select>
-      </label>
-      <label class="field"><span>Search</span><input type="search" id="ls-search" placeholder="Username, name, phone"></label>
       <div class="report-actions">
         <button class="primary" id="ls-scan">Scan sessions</button>
         <button id="ls-xlsx" disabled>Excel</button>
         <button id="ls-csv" disabled>CSV</button>
       </div>
     </section>
+    <section class="card report-filters"><div id="ls-filters"></div></section>
     <p class="error" id="ls-error" hidden></p>
     <p class="muted" id="ls-wait" hidden>Available once the user list has finished loading.</p>
     <section class="card load-panel" id="ls-progress" hidden>

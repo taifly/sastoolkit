@@ -654,6 +654,12 @@ var Operations = []*Operation{
 		Help: "SAS4 applies one action to every user matching the filter, in a " +
 			"single request. Preview first; the count you confirm is checked " +
 			"again just before sending."},
+	// Bulk change with a duplicate filter (duplicates.go): matched here and
+	// sent once per user. Started from /api/bulk/apply only, so it is not
+	// listed in the UI.
+	{Key: "bulk_change_each", Group: gServer, Label: "Bulk change (per user)",
+		Target: "server_bulk_each", Method: "POST", Route: bulkApplyRoute,
+		Danger: true, Verified: true, Build: buildBulkEach, Run: runBulkEach},
 }
 
 var ByKey = func() map[string]*Operation {

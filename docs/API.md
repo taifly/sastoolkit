@@ -63,15 +63,49 @@ dialog and answers JSON instead:
 
 ### Common shapes
 
-**`filters`**: selects users from the loaded list. Every field is optional,
-and the fields are combined with AND.
+**`filters`**: selects users from the loaded list. Every page that picks
+users takes the same object: Select users, export, jobs, Bulk change
+(`extra`), and both reports. Every field is optional, and the fields are
+combined with AND.
 
 ```json
 {"profiles": [3, 14], "managers": ["admin"], "statuses": ["active", "online"],
- "search": "ali", "expires_from": "2026-10-01", "expires_to": "2026-10-31"}
+ "search": "ali", "expires_from": "2026-10-01", "expires_to": "2026-10-31",
+ "duplicates": ["session_mac"], "session_states": ["online"],
+ "mac": "aabbcc", "nas_ip": "10.255.", "stop_reasons": ["Lost-Carrier"],
+ "upload_min": 1048576, "upload_max": null, "download_min": null,
+ "download_max": null, "total_min": null, "total_max": 10737418240}
 ```
 
 `statuses` takes `active`, `expired`, `disabled` and `online`.
+
+The last-session filters read each user's newest session from the
+[session scan](#post-apisessionsrefresh). Without a scan the answer is 409
+`scan the sessions first`.
+
+- `session_states`: `online`, `offline`, or `none` (no session in the
+  look-back window). A user with no session fails every other session
+  filter.
+- `mac`: contained in the session's MAC. Case and the separators `:` `-`
+  `.` are ignored.
+- `nas_ip`: contained in the session's NAS IP.
+- `stop_reasons`: the session's stop reason is one of these (case is
+  ignored). The choices are in [`stop_reasons`](#get-apisessionsstatus).
+- `upload_*`, `download_*`, `total_*`: the session's traffic in bytes,
+  inclusive. `null` means no bound.
+
+With any of these set, the rows are copies with `session_mac`, `session_ip`,
+`session_state`, `session_start`, `nas_ip`, `session_upload`,
+`session_download`, `session_total` and `session_stop_reason` added.
+
+`duplicates` keeps users who share a value with at least one other user.
+It takes `session_mac` (the MAC of the last session), `session_ip` (the IP of
+the current session, online users only) and `static_ip` (the user record).
+Several kinds are combined with OR. Duplicates are found across the whole
+user list, then the other filters apply. The two session kinds need a
+[session scan](#post-apisessionsrefresh); without one the answer is 409
+`scan the sessions first`. Matching rows are copies with `dup_value`,
+`dup_count` and the session fields above added, sorted by `dup_value`.
 
 **Paged answer**: `{"total", "page", "page_size", "rows"}`. `page_size` is
 capped at 500.
@@ -191,10 +225,12 @@ Answer: a paged answer of managers. Each row has `manager_id`,
 
 ```json
 {"period": "day", "date_from": "2026-10-01", "date_to": "2026-10-25",
- "profiles": [], "managers": [], "format": null}
+ "filters": { ... }, "format": null}
 ```
 
 - `period` is `day`, `week` or `month`.
+- [`filters`](#common-shapes) picks the users counted. The older top-level
+  `profiles` and `managers` still work, and are added to it.
 - The dates default to the last 30 days.
 
 Answer: `{period, from, to, rows, totals, generated_at}`.
@@ -245,8 +281,10 @@ Answer: the same shape as `GET /api/sessions/status`.
 ```json
 {"state": "loading", "error": null, "lookback_days": 90,
  "progress": {"pages": 3, "sessions": 1500, "seen": 900, "users": 5873, "...": "..."},
- "stopped": null, "scanned_at": null}
+ "stopped": null, "scanned_at": null, "stop_reasons": ["Lost-Carrier", "User-Request"]}
 ```
+
+`stop_reasons` lists the distinct stop reasons in the last complete scan.
 
 `stopped` says why the scan ended:
 
@@ -257,9 +295,12 @@ Answer: the same shape as `GET /api/sessions/status`.
 ### `POST /api/sessions/query`
 
 ```json
-{"filters": { ... }, "states": ["online", "offline", "none"], "page": 1,
+{"filters": {"session_states": ["online"], ...}, "page": 1,
  "page_size": 100, "format": null}
 ```
+
+The older top-level `states` field still works, and is added to
+`filters.session_states`.
 
 There is one row for each user, with their last session. `none` means the
 scan found no session for that user. Each row has:
@@ -304,6 +345,13 @@ Answer: `{total, sample, problems, filter}`.
 - `problems` lists sample rows that do not match the filter. These mean
   SAS4 ignored the filter.
 
+With `"extra": { ... }` (a [`filters`](#common-shapes) object) that has any
+field set, the match is worked out by the app instead, and `filters` may
+then be empty. If conditions are given, every user SAS4 matches is read
+(`index/user` with `bulk_filter`, all pages), and only the users who also
+pass `extra` are kept. Answer: `{total, rows, mode: "each"}`. `rows` holds up
+to 1000 users with their last session (when scanned) and duplicate group.
+
 ### `POST /api/bulk/apply`
 
 ```json
@@ -314,6 +362,13 @@ Answer: `{total, sample, problems, filter}`.
 - This starts a job. The job previews again, checks the count and the
   sample, and then sends `POST bulkChanges/users/apply` once.
 - The rules are in [SAS4_API.md](SAS4_API.md#post-bulkchangesusersapply).
+
+With `extra` set, the body also takes `dry_run` and `workers`. The match is
+worked out again and must still equal `expected_count`. Then a per-user job
+(`bulk_change_each`) starts. For each user it sends `POST index/user` with
+the filter `username = <name>`, which must find exactly that user. Then it
+sends `POST bulkChanges/users/apply` with the same filter and the action.
+A user whose filter finds anyone else is skipped.
 
 Answer: a [job summary](#job-summary).
 

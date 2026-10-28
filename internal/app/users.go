@@ -443,6 +443,30 @@ type UserFilters struct {
 	Search      string   `json:"search"`
 	ExpiresFrom *string  `json:"expires_from"`
 	ExpiresTo   *string  `json:"expires_to"`
+	// The rest is applied by App.filterUsers, not FilterUsers: most of it
+	// reads each user's last session. See duplicates.go and
+	// sessionfilter.go.
+	Duplicates    []string `json:"duplicates"`
+	MAC           string   `json:"mac"`            // contains; separators ignored
+	NasIP         string   `json:"nas_ip"`         // contains
+	StopReasons   []string `json:"stop_reasons"`   // any of, exact
+	SessionStates []string `json:"session_states"` // online | offline | none
+	// Traffic of the last session, in bytes.
+	UploadMin   *float64 `json:"upload_min"`
+	UploadMax   *float64 `json:"upload_max"`
+	DownloadMin *float64 `json:"download_min"`
+	DownloadMax *float64 `json:"download_max"`
+	TotalMin    *float64 `json:"total_min"`
+	TotalMax    *float64 `json:"total_max"`
+}
+
+// Active: whether any field narrows the list at all.
+func (f UserFilters) Active() bool {
+	return len(f.Profiles) > 0 || len(f.Managers) > 0 || len(f.Statuses) > 0 ||
+		strings.TrimSpace(f.Search) != "" ||
+		(f.ExpiresFrom != nil && *f.ExpiresFrom != "") ||
+		(f.ExpiresTo != nil && *f.ExpiresTo != "") ||
+		len(cleanKinds(f.Duplicates)) > 0 || sessionFiltered(f)
 }
 
 func (d *Directory) FilterUsers(f UserFilters) []M {

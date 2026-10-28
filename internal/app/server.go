@@ -141,12 +141,13 @@ type userQuery struct {
 }
 
 type reportBody struct {
-	Period   string   `json:"period"`
-	DateFrom *string  `json:"date_from"`
-	DateTo   *string  `json:"date_to"`
-	Profiles IntList  `json:"profiles"`
-	Managers []string `json:"managers"`
-	Format   *string  `json:"format"` // csv | xlsx for a download
+	Period   string      `json:"period"`
+	DateFrom *string     `json:"date_from"`
+	DateTo   *string     `json:"date_to"`
+	Filters  UserFilters `json:"filters"`
+	Profiles IntList     `json:"profiles"` // older shape, merged into Filters
+	Managers []string    `json:"managers"`
+	Format   *string     `json:"format"` // csv | xlsx for a download
 }
 
 type sessionScanBody struct {
@@ -187,15 +188,23 @@ type source struct {
 	ImportID *int        `json:"import_id"`
 }
 
+// Extra holds filters checked by this app (users.go UserFilters). When any
+// is set, the change is matched here and sent once per user, as a Job.
 type bulkPreviewBody struct {
 	Filters []BulkFilterRow `json:"filters"`
+	Extra   *UserFilters    `json:"extra"`
 }
+
+func extraActive(f *UserFilters) bool { return f != nil && f.Active() }
 
 type bulkApplyBody struct {
 	Filters       []BulkFilterRow `json:"filters"`
 	Action        *string         `json:"action"`
 	Option        any             `json:"option"`
 	ExpectedCount *int            `json:"expected_count"`
+	Extra         *UserFilters    `json:"extra"`
+	DryRun        bool            `json:"dry_run"` // with Extra only
+	Workers       int             `json:"workers"`
 }
 
 type jobBody struct {
@@ -558,7 +567,9 @@ func (a *App) routes() http.Handler {
 		}
 		ops := []M{}
 		for _, op := range Operations {
-			ops = append(ops, op.Describe())
+			if op.Target != "server_bulk_each" {
+				ops = append(ops, op.Describe())
+			}
 		}
 		return ok(w, M{"host": s.client.Origin, "username": s.client.Username,
 			"allow_unverified": a.cfg.AllowUnverified,
@@ -749,7 +760,10 @@ func (a *App) usersQuery(w http.ResponseWriter, r *http.Request) error {
 	if state != "ready" && len(d.CurrentUsers()) == 0 {
 		return fail(409, "the user list is still loading")
 	}
-	rows := d.FilterUsers(body.Filters)
+	rows, err := a.filterUsers(s, body.Filters)
+	if err != nil {
+		return err
+	}
 	out := pageOf(rows, body.Page, body.PageSize)
 	out["partial"] = state != "ready"
 	out["profiles"] = profileCounts(rows)
@@ -768,7 +782,11 @@ func (a *App) usersExport(w http.ResponseWriter, r *http.Request) error {
 	if err := ready(s); err != nil { // never export half a list
 		return err
 	}
-	users := filterIDs(s.directory.FilterUsers(body.Filters), "user_id", body.IDs)
+	filtered, err := a.filterUsers(s, body.Filters)
+	if err != nil {
+		return err
+	}
+	users := filterIDs(filtered, "user_id", body.IDs)
 	if len(users) == 0 {
 		return fail(400, "no users to export")
 	}
@@ -806,8 +824,24 @@ func (a *App) report(w http.ResponseWriter, r *http.Request) error {
 	if err := ready(s); err != nil { // a partial list would undercount
 		return err
 	}
+	f := body.Filters
+	f.Profiles = append(f.Profiles, body.Profiles...)
+	f.Managers = append(f.Managers, body.Managers...)
+	var keep map[int]bool // nil: everyone
+	if f.Active() {
+		rows, err := a.filterUsers(s, f)
+		if err != nil {
+			return err
+		}
+		keep = make(map[int]bool, len(rows))
+		for _, u := range rows {
+			if id, ok := val.Int(u["user_id"]); ok {
+				keep[id] = true
+			}
+		}
+	}
 	result, err := BuildReport(s.directory, body.Period, body.DateFrom, body.DateTo,
-		body.Profiles, body.Managers, time.Now())
+		keep, time.Now())
 	if err != nil {
 		return fail(400, "%s", err.Error())
 	}
@@ -870,8 +904,13 @@ func (a *App) sessionsQuery(w http.ResponseWriter, r *http.Request) error {
 	if last.State() != "ready" {
 		return fail(409, "scan the sessions first")
 	}
-	rows := SessionReportRows(s.directory.FilterUsers(body.Filters),
-		last.ByUsername(), body.States)
+	f := body.Filters // the older top-level states are the same filter
+	f.SessionStates = append(f.SessionStates, body.States...)
+	filtered, err := a.filterUsers(s, f)
+	if err != nil {
+		return err
+	}
+	rows := SessionReportRows(filtered, last.ByUsername(), nil)
 	format := formatOf(body.Format)
 	if format == "" {
 		out := pageOf(rows, body.Page, body.PageSize)
@@ -1028,9 +1067,70 @@ func (a *App) resolveRows(s *Session, op *Operation, src *source) ([]M, error) {
 		if op.Target != "users" {
 			return nil, fail(400, "this operation runs on managers")
 		}
-		rows, key = s.directory.FilterUsers(src.Filters), "user_id"
+		filtered, err := a.filterUsers(s, src.Filters)
+		if err != nil {
+			return nil, err
+		}
+		rows, key = filtered, "user_id"
 	}
 	return filterIDs(rows, key, src.IDs), nil
+}
+
+// filterUsers is the one way every page filters users: Directory.
+// FilterUsers, then the duplicate filters, then the last-session filters.
+// The last two need the session scan for the parts that read sessions.
+func (a *App) filterUsers(s *Session, f UserFilters) ([]M, error) {
+	return a.filterUsersIn(s, s.directory.CurrentUsers(), f)
+}
+
+// filterUsersIn filters rows, finding duplicates across all.
+func (a *App) filterUsersIn(s *Session, all []M, f UserFilters) ([]M, error) {
+	rows := s.directory.FilterUsers(f)
+	kinds := cleanKinds(f.Duplicates)
+	if len(kinds) == 0 && !sessionFiltered(f) {
+		return rows, nil
+	}
+	last, err := a.sessionsFor(s, f)
+	if err != nil {
+		return nil, err
+	}
+	if len(kinds) > 0 {
+		rows = ApplyDuplicates(rows, FindDuplicates(all, last, kinds))
+	}
+	return ApplySessionFilters(rows, last, f), nil
+}
+
+// sessionsFor: the last session of every user, when the filters need them.
+func (a *App) sessionsFor(s *Session, f UserFilters) (map[string]M, error) {
+	if !needsScan(f) {
+		return nil, nil
+	}
+	if s.lastSessions.State() != "ready" {
+		return nil, fail(409, "scan the sessions first")
+	}
+	return s.lastSessions.ByUsername(), nil
+}
+
+// bulkEachMatch: the users a bulk change with app filters runs on.
+func (a *App) bulkEachMatch(s *Session, rows []BulkFilterRow, extra UserFilters) ([]M, error) {
+	if err := ready(s); err != nil {
+		return nil, err
+	}
+	local, err := a.filterUsersIn(s, s.directory.Users(), extra)
+	if err != nil {
+		return nil, err
+	}
+	filters := []M{} // no condition rows: the app filters alone scope it
+	if len(rows) > 0 {
+		if filters, err = a.bulkFilters(s, rows); err != nil {
+			return nil, err
+		}
+	}
+	matched, err := BulkLocalMatch(s.client, local, filters)
+	if err != nil {
+		return nil, fail(502, "%s", err.Error())
+	}
+	return matched, nil
 }
 
 func (a *App) bulkFilters(s *Session, rows []BulkFilterRow) ([]M, error) {
@@ -1049,6 +1149,17 @@ func (a *App) bulkPreview(w http.ResponseWriter, r *http.Request) error {
 	var body bulkPreviewBody
 	if err := decode(r, &body); err != nil {
 		return err
+	}
+	if extraActive(body.Extra) {
+		matched, err := a.bulkEachMatch(s, body.Filters, *body.Extra)
+		if err != nil {
+			return err
+		}
+		var last map[string]M
+		if s.lastSessions.State() == "ready" {
+			last = s.lastSessions.ByUsername()
+		}
+		return ok(w, BulkLocalPreview(matched, last))
 	}
 	filters, err := a.bulkFilters(s, body.Filters)
 	if err != nil {
@@ -1074,6 +1185,9 @@ func (a *App) bulkApply(w http.ResponseWriter, r *http.Request) error {
 	if body.Action == nil || body.ExpectedCount == nil {
 		return fail(422, "action and expected_count are required")
 	}
+	if extraActive(body.Extra) {
+		return a.bulkApplyEach(w, s, body)
+	}
 	filters, err := a.bulkFilters(s, body.Filters)
 	if err != nil {
 		return err
@@ -1087,6 +1201,34 @@ func (a *App) bulkApply(w http.ResponseWriter, r *http.Request) error {
 	}
 	job := NewBulkChangeJob(s.client, ByKey["bulk_change"], filters, action,
 		*body.ExpectedCount, s.token, BulkSummarise(filters, action))
+	a.board.Add(job)
+	return ok(w, job.Summary(0))
+}
+
+// bulkApplyEach re-matches, checks the count the person confirmed, and
+// starts a per-user Job.
+func (a *App) bulkApplyEach(w http.ResponseWriter, s *Session, body bulkApplyBody) error {
+	action, err := BuildAction(*body.Action, body.Option)
+	if err != nil {
+		return fail(400, "%s", err.Error())
+	}
+	matched, err := a.bulkEachMatch(s, body.Filters, *body.Extra)
+	if err != nil {
+		return err
+	}
+	if len(matched) == 0 {
+		return fail(400, "the filter matches nobody")
+	}
+	if len(matched) != *body.ExpectedCount {
+		return fail(400, "the filter now matches %d users, not the %d you "+
+			"confirmed -- preview again", len(matched), *body.ExpectedCount)
+	}
+	job, err := NewJob(s.client, ByKey["bulk_change_each"], matched,
+		M{"action": action}, s.lookups(), body.DryRun, body.Workers, s.token,
+		a.cfg.AllowUnverified, nil)
+	if err != nil {
+		return fail(400, "%s", err.Error())
+	}
 	a.board.Add(job)
 	return ok(w, job.Summary(0))
 }
@@ -1110,7 +1252,7 @@ func (a *App) createJob(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if op.Target == "server_bulk" {
+	if op.Target == "server_bulk" || op.Target == "server_bulk_each" {
 		return fail(400, "use /api/bulk/apply for a bulk change")
 	}
 	rows, err := a.resolveRows(s, op, body.Source)

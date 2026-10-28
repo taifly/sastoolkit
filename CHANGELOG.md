@@ -3,6 +3,35 @@
 All notable changes to SAS toolkit are listed here. Versions follow
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+## [1.1.0] - 2026-10-28
+
+### Added
+
+- One filter panel shared by Select users, Bulk change, Users over time and
+  Last session, with the same filters on every page.
+- Last-session filters: session state, MAC, NAS IP, stop reason, and
+  upload / download / total ranges in MB or GB. The session scan can be
+  started from the filter.
+- "Shared with another user" filter: session MAC, session IP (online users)
+  and static IP.
+- Bulk change takes the panel as extra filters. When any is set, it shows the
+  matched users with their sessions and sends the action one user at a time,
+  with dry run, a report and Retry failed.
+- `/api/sessions/status` returns the stop reasons found in the last scan.
+
+### Changed
+
+- Users over time and Last session use the shared panel in place of their
+  own profile, manager, state and search fields. The old request fields
+  (`profiles`, `managers`, `states`) still work.
+
+### Fixed
+
+- Optional parts of the import result and the Bulk change preview showed
+  the text "null".
+
 ## [1.0.0] - 2026-10-25
 
 First release.

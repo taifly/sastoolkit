@@ -384,3 +384,134 @@ func BulkSummarise(filters []M, action M) string {
 	}
 	return a.Label + value + " where " + strings.Join(parts, " and ")
 }
+
+// --------------------------------------------------------------------------
+// ONE USER AT A TIME (duplicate filters)
+// --------------------------------------------------------------------------
+
+// The app's own filters (duplicates, last session: see App.filterUsers) are
+// worked out here, not by SAS4, so a bulk change that uses them cannot be
+// one SAS4 request. Instead the users
+// are matched here and the same bulkChanges/users/apply is sent once per
+// user, filtered on that username alone.
+
+const bulkEachShown = 1000 // preview rows sent to the browser
+
+// BulkLocalMatch -> the rows (already narrowed by the app filters) that
+// also pass the SAS4 condition rows, if any. With condition rows, SAS4 is
+// asked for every user they match, and each one is checked against the rows
+// wherever that can be done here, as BulkPreview does.
+func BulkLocalMatch(c *sas4.Client, rows []M, filters []M) ([]M, error) {
+	if len(filters) == 0 {
+		return rows, nil
+	}
+	keep := map[string]bool{}
+	problems := []string{}
+	opt := sas4.DefaultPageOpts()
+	opt.Extra = M{"bulk_filter": filters}
+	err := c.Paged(bulkPreviewRoute, UserColumns, opt, func(record M) bool {
+		for _, row := range filters {
+			if matches(record, row) == 0 {
+				problems = append(problems, fmt.Sprintf(
+					"%s: %s=%s does not satisfy %s %s",
+					val.Str(record["username"]), val.Str(row["key"]),
+					val.Str(record[checkable[val.Str(row["key"])]]),
+					val.Str(row["op"]), val.Str(row["value_label"])))
+				return false
+			}
+		}
+		keep[val.Fold(strings.TrimSpace(val.Str(record["username"])))] = true
+		return true
+	})
+	if err != nil {
+		return nil, bulkErrf("cannot read the users matching the "+
+			"conditions: %s", err.Error())
+	}
+	if len(problems) > 0 {
+		return nil, bulkErrf("SAS4 returned users that do not match the "+
+			"filter, so it may be ignoring it. %s", problems[0])
+	}
+	out := []M{}
+	for _, user := range rows {
+		if keep[val.Fold(strings.TrimSpace(val.Str(user["username"])))] {
+			out = append(out, user)
+		}
+	}
+	return out, nil
+}
+
+// BulkLocalPreview -> {total, rows, mode}: the matched users with their last
+// session (when scanned), grouped by the shared value if any.
+func BulkLocalPreview(matched []M, last map[string]M) M {
+	rows := []M{}
+	for _, user := range matched[:min(len(matched), bulkEachShown)] {
+		row := M{"user_id": user["user_id"], "username": user["username"],
+			"firstname": user["firstname"], "lastname": user["lastname"],
+			"profile_name":    user["profile_name"],
+			"parent_username": user["parent_username"],
+			"static_ip":       user["static_ip"]}
+		for _, k := range DuplicateColumns {
+			row[k] = user[k]
+		}
+		if session := last[val.Fold(strings.TrimSpace(val.Str(user["username"])))]; session != nil {
+			for k, v := range sessionFields(session) {
+				if row[k] == nil {
+					row[k] = v
+				}
+			}
+		}
+		rows = append(rows, row)
+	}
+	return M{"total": len(matched), "rows": rows, "mode": "each"}
+}
+
+func bulkEachBody(row, params M) (M, error) {
+	action, _ := params["action"].(M)
+	if action == nil {
+		return nil, bulkErrf("no action")
+	}
+	name := strings.TrimSpace(val.Str(row["username"]))
+	if name == "" {
+		return nil, skipf("no username")
+	}
+	filters, err := BuildFilter([]BulkFilterRow{{Key: "username", Op: "=",
+		Value: name}}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return M{"filter": filters, "action": action}, nil
+}
+
+func buildBulkEach(row, params M, ctx Ctx) (M, error) {
+	return bulkEachBody(row, params)
+}
+
+// runBulkEach applies the action to one user. The username filter is
+// previewed first and must find exactly this user, in case SAS4 treats "="
+// as a substring match.
+func runBulkEach(c *sas4.Client, row, params M, ctx Ctx) (string, int, string, M) {
+	body, err := bulkEachBody(row, params)
+	if err != nil {
+		return "skipped", 0, err.Error(), nil
+	}
+	filters := body["filter"].([]M)
+	check, err := BulkPreview(c, filters)
+	if err != nil {
+		return "failed", 0, err.Error(), body
+	}
+	sample, _ := check["sample"].([]M)
+	name := val.Str(row["username"])
+	if check["total"].(int) != 1 || len(sample) != 1 ||
+		val.Fold(strings.TrimSpace(val.Str(sample[0]["username"]))) !=
+			val.Fold(strings.TrimSpace(name)) {
+		return "skipped", 0, fmt.Sprintf("the username filter matches %d "+
+			"users, not just %s -- not sent", check["total"], name), body
+	}
+	// Sent once, never retried: a timeout may come after SAS4 applied it.
+	status, data := c.Call("POST", bulkApplyRoute, body, 0)
+	action := "failed"
+	if sas4.Succeeded(status, data) {
+		action = "done"
+	}
+	return action, status, sas4.Message(data), body
+}

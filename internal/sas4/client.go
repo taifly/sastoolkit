@@ -255,6 +255,8 @@ type PageOpts struct {
 	Retries   int
 	SortBy    string
 	Direction string
+	// Extra fields sent with every page, e.g. bulk_filter.
+	Extra M
 	// OnPage(page, lastPage, seen, total) after each page.
 	OnPage func(page int, last any, seen int, total any)
 }
@@ -270,10 +272,13 @@ func (c *Client) Paged(route string, columns []string, opt PageOpts,
 	fn func(M) bool) error {
 	page, seen := 1, 0
 	for {
-		status, data := c.Call("POST", route, M{
-			"page": page, "count": opt.PageSize, "sortBy": opt.SortBy,
+		body := M{"page": page, "count": opt.PageSize, "sortBy": opt.SortBy,
 			"direction": opt.Direction, "search": opt.Search,
-			"columns": columns}, opt.Retries)
+			"columns": columns}
+		for k, v := range opt.Extra {
+			body[k] = v
+		}
+		status, data := c.Call("POST", route, body, opt.Retries)
 		obj, _ := data.(M)
 		rows, ok := obj["data"].([]any)
 		if !ok {

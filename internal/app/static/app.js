@@ -53,6 +53,200 @@ function debounce(fn, ms) {
 const fmt = n => (n === null || n === undefined) ? "" : Number(n).toLocaleString();
 
 // ---------------------------------------------------------------------------
+// user filter panel
+// ---------------------------------------------------------------------------
+
+// One panel, used by every page that picks users (Select users, Bulk change,
+// both reports). value() is the API's `filters` object (docs/API.md). The
+// session part reads each user's last session, so it needs a session scan;
+// the server answers 409 "scan the sessions first" without one.
+
+const TRAFFIC_UNITS = { MB: 1024 ** 2, GB: 1024 ** 3 };
+
+class FilterPanel {
+  constructor(root, { onChange } = {}) {
+    this.root = root;
+    this.profiles = new Set();
+    this.changed = debounce(() => (onChange || (() => {}))(), 300);
+    this.build();
+  }
+
+  checks(values) {
+    return h("div", { class: "checks" }, values.map(([v, label, title]) =>
+      h("label", { title: title || null },
+        h("input", { type: "checkbox", value: v, onchange: () => this.changed() }), " " + label)));
+  }
+
+  field(label, ...inputs) {
+    return h("div", { class: "field" }, h("span", {}, label), ...inputs);
+  }
+
+  input(attrs) {
+    return h("input", { ...attrs, oninput: () => this.changed() });
+  }
+
+  range(name) {
+    return h("div", { class: "range" },
+      this.el[name + "_min"] = this.input({ type: "number", min: 0, step: "any", placeholder: "min" }),
+      h("span", { class: "muted" }, "–"),
+      this.el[name + "_max"] = this.input({ type: "number", min: 0, step: "any", placeholder: "max" }));
+  }
+
+  build() {
+    const el = this.el = {};
+    el.profileSearch = h("input", { type: "search", placeholder: "Search profiles…",
+                                    oninput: () => this.renderProfiles() });
+    el.profileList = h("div", { class: "picker-list" });
+    el.manager = h("select", { onchange: () => this.changed() });
+    el.statuses = this.checks([["active", "Active"], ["expired", "Expired"],
+                               ["disabled", "Disabled"], ["online", "Online"]]);
+    el.search = this.input({ type: "search", placeholder: "username, name, phone" });
+    el.from = this.input({ type: "date" });
+    el.to = this.input({ type: "date" });
+
+    el.states = this.checks([["online", "Online"], ["offline", "Offline"],
+                             ["none", "No session", "No session in the scan's look-back window"]]);
+    el.dups = this.checks([["session_mac", "Session MAC", "Same MAC on the last session"],
+                           ["session_ip", "Session IP", "Same IP on the current session (online users only)"],
+                           ["static_ip", "Static IP", "Same static IP on the user record"]]);
+    el.mac = this.input({ type: "search", placeholder: "contains, e.g. aabbcc" });
+    el.nas = this.input({ type: "search", placeholder: "contains" });
+    el.reason = h("select", { onchange: () => this.changed() }, h("option", { value: "" }, "Any"));
+    el.unit = h("select", { onchange: () => this.changed() },
+      Object.keys(TRAFFIC_UNITS).map(u => h("option", { value: u, selected: u === "GB" }, u)));
+    el.session = h("details", { class: "session-filters" },
+      h("summary", {}, "Session filters (last session)"),
+      h("div", { class: "filters" },
+        this.field("Session", el.states),
+        this.field("Shared with another user", el.dups),
+        this.field("MAC", el.mac),
+        this.field("NAS IP", el.nas),
+        this.field("Stop reason", el.reason),
+        this.field("Traffic unit", el.unit),
+        this.field("Upload", this.range("upload")),
+        this.field("Download", this.range("download")),
+        this.field("Total", this.range("total"))),
+      h("p", { class: "muted small" },
+        "Matched against each user's last session — these need a session scan (Static IP does not)."));
+
+    this.root.replaceChildren(
+      h("div", { class: "filters" },
+        h("div", { class: "field wide" }, h("span", {}, "Profiles"),
+          h("div", { class: "picker" }, el.profileSearch, el.profileList)),
+        this.field("Manager", el.manager),
+        this.field("Status", el.statuses),
+        this.field("Search", el.search),
+        this.field("Expires from", el.from),
+        this.field("Expires to", el.to)),
+      el.session);
+    this.refresh();
+  }
+
+  renderProfiles() {
+    const needle = this.el.profileSearch.value.trim().toLowerCase();
+    const profiles = (S.meta && S.meta.profiles) || [];
+    this.el.profileList.replaceChildren(...profiles
+      .filter(p => !needle || String(p.name).toLowerCase().includes(needle) || String(p.id) === needle)
+      .map(p => h("label", {},
+        h("input", { type: "checkbox", checked: this.profiles.has(p.id), onchange: e => {
+          e.target.checked ? this.profiles.add(p.id) : this.profiles.delete(p.id);
+          this.changed();
+        } }),
+        h("span", {}, p.name), h("span", { class: "count" }, `#${p.id}`))));
+  }
+
+  // Rebuilds the choices from S.meta (and the stop reasons from the last
+  // scan), keeping what is picked.
+  refresh(stopReasons) {
+    this.renderProfiles();
+    const sel = this.el.manager, keep = sel.value;
+    sel.replaceChildren(h("option", { value: "" }, "Any manager"),
+      ...((S.meta && S.meta.managers) || []).map(m => h("option", { value: m.name, selected: m.name === keep }, m.name)));
+    if (stopReasons) {
+      const r = this.el.reason, keepR = r.value;
+      const list = keepR && !stopReasons.includes(keepR) ? [...stopReasons, keepR] : stopReasons;
+      r.replaceChildren(h("option", { value: "" }, "Any"),
+        ...list.map(v => h("option", { value: v, selected: v === keepR }, v)));
+    }
+  }
+
+  reset() {
+    this.profiles.clear();
+    for (const i of $$("input", this.root)) {
+      if (i.type === "checkbox") i.checked = false; else i.value = "";
+    }
+    this.el.manager.value = this.el.reason.value = "";
+    this.el.session.open = false;
+    this.refresh([]);
+  }
+
+  value() {
+    const el = this.el, picked = box => $$("input:checked", box).map(i => i.value);
+    const unit = TRAFFIC_UNITS[el.unit.value];
+    const bytes = input => input.value === "" ? null : Number(input.value) * unit;
+    const out = {
+      profiles: [...this.profiles],
+      managers: el.manager.value ? [el.manager.value] : [],
+      statuses: picked(el.statuses),
+      search: el.search.value.trim(),
+      expires_from: el.from.value || null,
+      expires_to: el.to.value || null,
+      duplicates: picked(el.dups),
+      session_states: picked(el.states),
+      mac: el.mac.value.trim(),
+      nas_ip: el.nas.value.trim(),
+      stop_reasons: el.reason.value ? [el.reason.value] : [],
+    };
+    for (const k of ["upload", "download", "total"]) {
+      out[k + "_min"] = bytes(el[k + "_min"]);
+      out[k + "_max"] = bytes(el[k + "_max"]);
+    }
+    return out;
+  }
+
+  active() {
+    const v = this.value();
+    return Boolean(v.profiles.length || v.managers.length || v.statuses.length || v.search ||
+      v.expires_from || v.expires_to || v.duplicates.length || readsSessions(v));
+  }
+
+  // A short description of what is set, for confirm dialogs.
+  describe() {
+    const v = this.value(), out = [];
+    const names = (S.meta && S.meta.profiles) || [];
+    if (v.profiles.length) out.push("profile " + v.profiles.map(id => (names.find(p => p.id === id) || {}).name || id).join(" or "));
+    if (v.managers.length) out.push("manager " + v.managers[0]);
+    if (v.statuses.length) out.push("status " + v.statuses.join(" or "));
+    if (v.search) out.push(`search "${v.search}"`);
+    if (v.expires_from || v.expires_to) out.push(`expires ${v.expires_from || "…"} to ${v.expires_to || "…"}`);
+    if (v.session_states.length) out.push("session " + v.session_states.join(" or "));
+    if (v.duplicates.length) out.push("shares " + v.duplicates.join(" or ") + " with another user");
+    if (v.mac) out.push(`MAC contains ${v.mac}`);
+    if (v.nas_ip) out.push(`NAS IP contains ${v.nas_ip}`);
+    if (v.stop_reasons.length) out.push("stop reason " + v.stop_reasons[0]);
+    for (const k of ["upload", "download", "total"]) {
+      const lo = this.el[k + "_min"].value, hi = this.el[k + "_max"].value;
+      if (lo || hi) out.push(`${k} ${lo || "0"}–${hi || "∞"} ${this.el.unit.value}`);
+    }
+    return out;
+  }
+}
+
+// Whether filters read the last session (static IP alone does not).
+function readsSessions(v) {
+  return Boolean(v.duplicates.some(d => d !== "static_ip") || v.session_states.length ||
+    v.mac || v.nas_ip || v.stop_reasons.length ||
+    ["upload", "download", "total"].some(k => v[k + "_min"] !== null || v[k + "_max"] !== null));
+}
+
+// Stop reasons of the last scan, for every panel's dropdown.
+async function refreshPanels() {
+  let reasons;
+  try { reasons = (await api("/api/sessions/status")).stop_reasons; } catch (_) { /* not signed in */ }
+  for (const p of Object.values(PANELS)) p.refresh(reasons);
+}
+
+// ---------------------------------------------------------------------------
 // state
 // ---------------------------------------------------------------------------
 
@@ -68,13 +262,25 @@ const S = {
   loading: false,
   querySeq: 0,
   partial: false,         // the directory is still loading
-  selectedProfiles: new Set(),
   profileCounts: {},
   imported: null,         // {import_id, matched, target}
   dirReady: false,
   openJobs: new Set(),
   jobsTimer: null,
   extensions: null,
+};
+
+// One filter panel per page; see FilterPanel.
+const PANELS = {
+  ops: new FilterPanel($("#user-filters"), { onChange: () => {
+    S.ticked.clear();
+    S.extensions = null;
+    renderForm();
+    query();
+  } }),
+  bulk: new FilterPanel($("#bulk-filters"), { onChange: () => bulkFiltersChanged() }),
+  activity: new FilterPanel($("#r-filters"), { onChange: () => { if (S.report) runReport(); } }),
+  sessions: new FilterPanel($("#ls-filters"), { onChange: () => requerySessions() }),
 };
 
 // ---------------------------------------------------------------------------
@@ -144,7 +350,7 @@ $("#logout").addEventListener("click", async () => {
   S.meta = null;
   S.dirReady = false;
   S.ticked.clear();
-  S.selectedProfiles.clear();
+  for (const p of Object.values(PANELS)) p.reset();
   S.imported = null;
   S.rows = [];
   S.fields = [];
@@ -171,7 +377,7 @@ async function startApp() {
   $("#dir-status").hidden = false;
   $("#who").textContent = S.meta.username;
   renderOps();
-  renderProfilePicker();
+  refreshPanels();
   renderColumnPicker();
   selectOp(S.op ? S.op.key : S.meta.operations[0].key);
   pollDirectory();
@@ -221,8 +427,7 @@ async function pollDirectory() {
     if (status.manager_error) el.title = status.manager_error;
     if (!wasReady) {
       S.meta = await api("/api/meta");        // managers are known now
-      renderManagerSelect();
-      fillReportSelects();
+      refreshPanels();
       if (S.view === "reports") showReport(S.reportTab || "activity");
       renderForm();
       query();
@@ -312,7 +517,7 @@ function selectOp(key) {
   $("#exportpick").hidden = isManagers;
   $('[data-tab="filter"]').disabled = isNew;
   $("#tabs").hidden = isBulk;
-  $("#run-opts").hidden = isBulk;
+  $("#run-opts").hidden = isBulk && !PANELS.bulk.active();
   if (isBulk) {
     S.bulkPreview = null;
     renderBulkRows();
@@ -378,7 +583,7 @@ function renderForm() {
 
 function extensionInput(f, current) {
   const wrap = h("div", { class: "ext" });
-  const profiles = [...S.selectedProfiles];
+  const profiles = PANELS.ops.value().profiles;
   if (S.extensions && S.extensions.length) {
     wrap.append(h("select", { name: f.name },
       h("option", { value: "" }, "— choose —"),
@@ -424,53 +629,20 @@ function setTab(tab) {
 }
 $$("#tabs .tab").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
 
-function renderProfilePicker() {
-  const list = $("#profile-list"), needle = $("#profile-search").value.trim().toLowerCase();
-  list.replaceChildren();
-  for (const p of S.meta.profiles) {
-    if (needle && !String(p.name).toLowerCase().includes(needle) && String(p.id) !== needle) continue;
-    list.append(h("label", {},
-      h("input", { type: "checkbox", checked: S.selectedProfiles.has(p.id), onchange: e => {
-        e.target.checked ? S.selectedProfiles.add(p.id) : S.selectedProfiles.delete(p.id);
-        S.extensions = null;
-        renderForm();
-        filtersChanged();
-      } }),
-      h("span", {}, p.name), h("span", { class: "count" }, `#${p.id}`)));
-  }
-}
-$("#profile-search").addEventListener("input", renderProfilePicker);
+// The panels themselves are made once the page's elements exist; see
+// PANELS below.
+function filters() { return PANELS.ops.value(); }
 
-function renderManagerSelect() {
-  const sel = $("#f-manager"), keep = sel.value;
-  sel.replaceChildren(h("option", { value: "" }, "Any manager"),
-    S.meta.managers.map(m => h("option", { value: m.name, selected: m.name === keep }, m.name)));
-}
-
-function filters() {
-  return {
-    profiles: [...S.selectedProfiles],
-    managers: $("#f-manager").value ? [$("#f-manager").value] : [],
-    statuses: $$("#f-status input:checked").map(i => i.value),
-    search: $("#f-search").value,
-    expires_from: $("#f-from").value || null,
-    expires_to: $("#f-to").value || null,
-  };
-}
-
-const filtersChanged = debounce(() => { S.ticked.clear(); query(); }, 300);
-for (const id of ["#f-manager", "#f-search", "#f-from", "#f-to", "#m-search"])
-  $(id).addEventListener("input", filtersChanged);
-$$("#f-status input").forEach(i => i.addEventListener("change", filtersChanged));
+$("#m-search").addEventListener("input", debounce(() => { S.ticked.clear(); query(); }, 300));
 $$('input[name="scope"]').forEach(i => i.addEventListener("change", updateSummary));
 
-function renderRowsMessage(text) {
+function renderRowsMessage(text, extra = null) {
   S.querySeq++;                   // drop any page still on its way
   S.rows = [];
   S.total = 0;
   const table = $("#rows");
   $("thead", table).replaceChildren();
-  $("tbody", table).replaceChildren(h("tr", {}, h("td", { class: "muted" }, text)));
+  $("tbody", table).replaceChildren(h("tr", {}, h("td", { class: "muted" }, text, extra ? " " : null, extra)));
   $("#pager").replaceChildren();
   $("#match-count").textContent = "";
 }
@@ -529,6 +701,12 @@ const COLUMN_DEFS = [
   ["user_id", "ID"],
 ];
 const COMPUTED = new Set(["fullname", "status"]);
+const DUP_COLUMNS = [["dup_value", "Shared"], ["dup_count", "Users sharing"],
+                     ["session_mac", "Session MAC"], ["session_ip", "Session IP"],
+                     ["session_state", "Session"], ["session_start", "Session start"],
+                     ["nas_ip", "NAS IP"], ["session_upload", "Upload"],
+                     ["session_download", "Download"], ["session_total", "Total"],
+                     ["session_stop_reason", "Stop reason"]];
 const NUMERIC = new Set(["balance", "loan_balance", "remaining_days", "debt_days", "traffic",
                          "used_traffic", "available_traffic", "simultaneous_sessions", "pin_tries"]);
 const DEFAULT_COLUMNS = ["username", "fullname", "profile_name", "parent_username", "status",
@@ -612,7 +790,14 @@ function tableCols() {
     return [["Username", r => r.manager_username], ["Name", NAME],
             ["Balance", r => r.balance], ["Loan", r => r.loan_balance], ["Users", r => r.users_count]];
   }
-  return S.visibleCols.map(key => [labelFor(key), r => cellValue(key, r), key]);
+  const cols = S.visibleCols.map(key => [labelFor(key), r => cellValue(key, r), key]);
+  // Shown while a session filter is on, without touching the saved picks.
+  const f = PANELS.ops.value();
+  const keys = [...(f.duplicates.length ? DUP_COLUMNS.slice(0, 2) : []),
+                ...(readsSessions(f) ? DUP_COLUMNS.slice(2) : [])];
+  if (!keys.length) return cols;
+  return [...keys.map(([k, t]) => [t, r => r[k] ?? "", k]),
+          ...cols.filter(([, , k]) => !keys.some(([d]) => d === k))];
 }
 
 async function query() {
@@ -640,7 +825,9 @@ async function loadMore(first = false) {
       ? await api("/api/managers/query", { body: { search: $("#m-search").value, page, page_size: S.pageSize } })
       : await api("/api/users/query", { body: { filters: filters(), page, page_size: S.pageSize } });
   } catch (ex) {
-    if (seq === S.querySeq) { S.loading = false; renderRowsMessage(ex.message); }
+    if (seq !== S.querySeq) return;
+    S.loading = false;
+    renderRowsMessage(ex.message, needsScan(ex) ? scanButton(() => query()) : null);
     return;
   }
   if (seq !== S.querySeq) return;          // the filters changed meanwhile
@@ -796,10 +983,10 @@ $("#import-form").addEventListener("submit", async e => {
         h("span", { class: "muted" }, ` · columns: ${r.columns.join(", ")}`)),
       r.unmatched_count ? h("details", { open: true },
         h("summary", {}, "Rows that will not run"),
-        rowsTable(r.unmatched, ["line", "username", "manager_username", "reason"])) : null,
+        rowsTable(r.unmatched, ["line", "username", "manager_username", "reason"])) : "",
       r.preview.length ? h("details", {},
         h("summary", {}, "Preview"),
-        rowsTable(r.preview, Object.keys(r.preview[0]).filter(k => k !== "line").slice(0, 10))) : null);
+        rowsTable(r.preview, Object.keys(r.preview[0]).filter(k => k !== "line").slice(0, 10))) : "");
   } catch (ex) {
     S.imported = null;
     out.replaceChildren(h("p", { class: "error" }, ex.message));
@@ -814,6 +1001,36 @@ function rowsTable(rows, cols) {
     h("tbody", {}, rows.map(r => h("tr", {}, cols.map(c => h("td", { class: c === "message" ? "msg" : null }, r[c] ?? "")))))));
 }
 
+// The "shared with" filters on session MAC / IP need the last-session scan.
+const needsScan = ex => /scan the sessions first/.test(ex.message);
+
+function scanButton(then) {
+  const btn = h("button", { type: "button", onclick: async () => {
+    btn.disabled = true;
+    const days = Number($("#ls-lookback").value);
+    btn.textContent = "Scanning sessions…";
+    try {
+      await api("/api/sessions/refresh", { body: { lookback_days: days } });
+      for (;;) {
+        const status = await api("/api/sessions/status");
+        if (status.state === "error") throw new Error("Reading sessions failed: " + status.error);
+        if (status.state === "ready") break;
+        const p = status.progress || {};
+        btn.textContent = `Scanning sessions… ${fmt(p.seen || 0)} / ${fmt(p.users || 0)} users`;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      S.ls.data = null;               // the Last session report reads it afresh
+      refreshPanels();                // stop reasons from this scan
+      then();
+    } catch (ex) {
+      btn.disabled = false;
+      btn.textContent = "Scan sessions";
+      btn.after(h("span", { class: "error" }, " " + ex.message));
+    }
+  } }, "Scan sessions");
+  return btn;
+}
+
 // ---------------------------------------------------------------------------
 // run
 // ---------------------------------------------------------------------------
@@ -823,7 +1040,8 @@ function selection() {
   if (S.op.target === "server_bulk") {
     const p = S.bulkPreview;
     if (!p || p.sig !== bulkSig()) return { count: 0, why: "Preview the matching users first." };
-    if (p.problems.length) return { count: 0, why: "SAS4 returned users that do not match the filter — fix it before applying." };
+    if (p.problems && p.problems.length) return { count: 0, why: "SAS4 returned users that do not match the filter — fix it before applying." };
+    if (p.mode === "each") return { count: p.total, each: true, text: `${fmt(p.total)} user(s) matching the filter, one request each` };
     return { count: p.total, text: `${fmt(p.total)} user(s) matching the filter` };
   }
   if (S.tab === "import" || S.op.target === "new_users") {
@@ -849,7 +1067,7 @@ function updateSummary() {
   el.textContent = sel.count ? `Runs on ${sel.text}.` : (sel.why || "Nothing selected.");
   const run = $("#run");
   run.disabled = !sel.count;
-  if (S.op.target === "server_bulk") {
+  if (S.op.target === "server_bulk" && !sel.each) {
     run.className = "big danger";
     run.textContent = `Apply to ${fmt(sel.count)} user(s)`;
     return;
@@ -923,7 +1141,23 @@ function confirmRun(op, params, sel, dry) {
 S.bulkRows = [{ key: "profile_id", op: "=", value: "" }];
 S.bulkPreview = null;
 
-function bulkSig() { return JSON.stringify(S.bulkRows); }
+// The extra filters, or null when none is set (one SAS4 request then).
+function bulkExtra() { return PANELS.bulk.active() ? PANELS.bulk.value() : null; }
+
+function bulkSig() { return JSON.stringify([S.bulkRows, bulkExtra()]); }
+
+// With an extra filter the conditions are optional, and the action is sent
+// once per user -- so the dry run / parallel options apply.
+function bulkFiltersChanged() {
+  if (!S.meta) return;
+  const each = PANELS.bulk.active();
+  if (!each && !S.bulkRows.length) S.bulkRows.push({ key: "profile_id", op: "=", value: "" });
+  $("#run-opts").hidden = !each;
+  S.bulkPreview = null;
+  $("#bulk-result").replaceChildren();
+  renderBulkRows();
+  updateSummary();
+}
 
 function idChoices(type) {
   return type === "profile" ? S.meta.profiles : type === "manager" ? S.meta.managers
@@ -963,7 +1197,7 @@ function renderBulkRows() {
         ops.map(o => h("option", { value: o, selected: o === row.op }, o))),
       valueInput(key.type, row.value, e => { row.value = e.target.value; changed(); },
                  row.op === "like" ? "use % as wildcard" : ""),
-      h("button", { type: "button", title: "Remove", disabled: S.bulkRows.length === 1,
+      h("button", { type: "button", title: "Remove", disabled: S.bulkRows.length === 1 && !PANELS.bulk.active(),
         onclick: () => { S.bulkRows.splice(i, 1); changed(); renderBulkRows(); } }, "×")));
   });
 }
@@ -975,26 +1209,52 @@ $("#bulk-add").addEventListener("click", () => {
   updateSummary();
 });
 
-$("#bulk-preview").addEventListener("click", async () => {
-  const out = $("#bulk-result"), sig = bulkSig();
+$("#bulk-preview").addEventListener("click", previewBulk);
+
+async function previewBulk() {
+  const out = $("#bulk-result"), sig = bulkSig(), extra = bulkExtra();
   out.replaceChildren(h("p", { class: "muted" }, "Counting…"));
   try {
-    const r = await api("/api/bulk/preview", { body: { filters: S.bulkRows } });
+    const r = await api("/api/bulk/preview", { body: { filters: S.bulkRows, extra } });
     S.bulkPreview = { ...r, sig };
+    if (r.mode === "each") {
+      out.replaceChildren(
+        h("p", {}, h("span", { class: "big-count" }, fmt(r.total)), " user(s) match",
+          r.rows.some(x => x.dup_value) ? ", grouped by what they share." : "."),
+        r.rows.length < r.total ? h("p", { class: "muted" }, `First ${fmt(r.rows.length)} shown.`) : "",
+        r.rows.length ? bulkEachTable(r.rows) : "");
+      updateSummary();
+      return;
+    }
     out.replaceChildren(
       h("p", {}, h("span", { class: "big-count" }, fmt(r.total)), " user(s) match."),
       r.problems.length ? h("p", { class: "error" },
         "SAS4 returned users that do not match this filter, so it may be ignoring it. Applying is blocked.\n" +
-        r.problems.slice(0, 5).join("\n")) : null,
+        r.problems.slice(0, 5).join("\n")) : "",
       r.sample.length ? h("details", { open: true },
         h("summary", {}, `First ${r.sample.length}`),
-        rowsTable(r.sample, ["username", "firstname", "lastname", "profile_name", "parent_username", "enabled", "expiration"])) : null);
+        rowsTable(r.sample, ["username", "firstname", "lastname", "profile_name", "parent_username", "enabled", "expiration"])) : "");
   } catch (ex) {
     S.bulkPreview = null;
-    out.replaceChildren(h("p", { class: "error" }, ex.message));
+    out.replaceChildren(h("p", { class: "error" }, ex.message, needsScan(ex) ? " " : null,
+      needsScan(ex) ? scanButton(previewBulk) : null));
   }
   updateSummary();
-});
+}
+
+function bulkEachTable(rows) {
+  const cols = [["Shared", r => r.dup_value], ["Users", r => r.dup_count], ["Username", r => r.username],
+                ["Name", NAME], ["Profile", r => r.profile_name], ["Manager", r => r.parent_username],
+                ["Session MAC", r => r.session_mac], ["Session IP", r => r.session_ip],
+                ["Session", r => r.session_state], ["Session start", r => r.session_start],
+                ["NAS IP", r => r.nas_ip], ["Upload", r => r.session_upload],
+                ["Download", r => r.session_download], ["Total", r => r.session_total],
+                ["Stop reason", r => r.session_stop_reason], ["Static IP", r => r.static_ip]]
+    .filter(([, get]) => rows.some(r => get(r) !== undefined && get(r) !== null && get(r) !== ""));
+  return h("div", { class: "table-wrap" }, h("table", {},
+    h("thead", {}, h("tr", {}, cols.map(([t]) => h("th", {}, t)))),
+    h("tbody", {}, rows.map(r => h("tr", {}, cols.map(([, get]) => h("td", {}, get(r) ?? "")))))));
+}
 
 function renderBulkAction(form, old) {
   const actions = S.meta.bulk.actions;
@@ -1036,26 +1296,37 @@ async function applyBulk(sel) {
   let value = params.option;
   const items = idChoices(action.type);
   if (items) value = (items.find(i => String(i.id) === String(value)) || {}).name || value;
+  const extra = bulkExtra(), dry = sel.each && $("#dry-run").checked;
+  if (extra) {
+    for (const d of PANELS.bulk.describe()) conds.push(h("li", {}, h("b", {}, d)));
+    $("#confirm-title").textContent += dry ? " — dry run" : " — LIVE";
+  }
   $("#confirm-body").replaceChildren(
-    h("p", {}, h("b", {}, "SAS4 will apply this to every matching user, in one request. "),
-      `Matched now: ${sel.text}.`),
+    sel.each
+      ? h("p", {}, dry ? "Nothing will be sent to SAS4. " : h("b", {}, "This changes SAS4 for real, one request per user. "),
+          `Matched now: ${sel.text}.`)
+      : h("p", {}, h("b", {}, "SAS4 will apply this to every matching user, in one request. "),
+          `Matched now: ${sel.text}.`),
     h("p", {}, "Action: ", h("b", {}, action.label + (action.type ? ` = ${value}` : ""))),
     h("p", {}, "Where:"), h("ul", {}, conds),
-    h("p", { class: "muted" }, "The count is checked again right before sending; if it changed, nothing is sent."));
+    h("p", { class: "muted" }, sel.each
+      ? "The match is worked out again right before starting; if the count changed, nothing is sent. Each user's username filter is checked to find only that user."
+      : "The count is checked again right before sending; if it changed, nothing is sent."));
   const expect = String(sel.count), typed = $("#confirm-type"), okBtn = $("#confirm-ok");
-  $("#confirm-type-wrap").hidden = false;
+  $("#confirm-type-wrap").hidden = dry;
   $("#confirm-expect").textContent = expect;
   typed.value = "";
-  okBtn.className = "danger";
-  okBtn.disabled = true;
+  okBtn.className = dry ? "primary" : "danger";
+  okBtn.disabled = !dry;
   typed.oninput = () => { okBtn.disabled = typed.value.trim() !== expect; };
   dlg.showModal();
-  typed.focus();
+  if (!dry) typed.focus();
   const ok = await new Promise(resolve => { dlg.onclose = () => resolve(dlg.returnValue === "ok"); });
   if (!ok) return;
   try {
     const job = await api("/api/bulk/apply", { body: { filters: S.bulkRows, action: params.action,
-      option: params.option, expected_count: sel.count } });
+      option: params.option, expected_count: sel.count, extra,
+      dry_run: dry, workers: Number($("#workers").value) || 4 } });
     S.openJobs.add(job.id);
     S.bulkPreview = null;          // a fresh preview is needed for another run
     updateSummary();
@@ -1135,7 +1406,7 @@ function showView(name) {
   $$("#views .view").forEach(b => b.classList.toggle("active", b.dataset.view === name));
   $("#app-view").hidden = name !== "ops";
   $("#reports-view").hidden = name !== "reports";
-  if (name === "reports") { fillReportSelects(); showReport(S.reportTab || "activity"); }
+  if (name === "reports") showReport(S.reportTab || "activity");
 }
 $$("#views .view").forEach(b => b.addEventListener("click", () => showView(b.dataset.view)));
 
@@ -1154,17 +1425,6 @@ function setDefaultRange() {
 }
 $("#r-period").addEventListener("change", setDefaultRange);
 setDefaultRange();
-
-function fillReportSelects() {
-  if (!S.meta) return;
-  for (const [profile, manager] of [["#r-profile", "#r-manager"], ["#ls-profile", "#ls-manager"]]) {
-    const keepP = $(profile).value, keepM = $(manager).value;
-    $(profile).replaceChildren(h("option", { value: "" }, "All profiles"),
-      S.meta.profiles.map(p => h("option", { value: p.id, selected: String(p.id) === keepP }, p.name)));
-    $(manager).replaceChildren(h("option", { value: "" }, "All managers"),
-      S.meta.managers.map(m => h("option", { value: m.name, selected: m.name === keepM }, m.name)));
-  }
-}
 
 // Two reports share the view: "Users over time" and "Last session".
 function showReport(name) {
@@ -1185,8 +1445,7 @@ function reportReady() {
 function reportBody(format) {
   return { period: $("#r-period").value, date_from: $("#r-from").value || null,
            date_to: $("#r-to").value || null,
-           profiles: $("#r-profile").value ? [Number($("#r-profile").value)] : [],
-           managers: $("#r-manager").value ? [$("#r-manager").value] : [],
+           filters: PANELS.activity.value(),
            format: format || null };
 }
 
@@ -1198,7 +1457,8 @@ async function runReport() {
     S.report = await api("/api/reports", { body: reportBody() });
     renderReport();
   } catch (ex) {
-    err.textContent = ex.message; err.hidden = false;
+    err.replaceChildren(ex.message, needsScan(ex) ? " " : "", needsScan(ex) ? scanButton(runReport) : "");
+    err.hidden = false;
   } finally {
     $("#r-run").disabled = !S.dirReady;
   }
@@ -1293,11 +1553,7 @@ const LS_COLS = [
 const STATE_TAG = { online: ["Online", "on"], offline: ["Offline", null], none: ["No session", "off"] };
 
 function sessionsBody(format) {
-  const state = $("#ls-state").value;
-  return { filters: { profiles: $("#ls-profile").value ? [Number($("#ls-profile").value)] : [],
-                      managers: $("#ls-manager").value ? [$("#ls-manager").value] : [],
-                      search: $("#ls-search").value.trim() },
-           states: state ? [state] : [], page: S.ls.page, page_size: S.ls.pageSize,
+  return { filters: PANELS.sessions.value(), page: S.ls.page, page_size: S.ls.pageSize,
            format: format || null };
 }
 
@@ -1345,7 +1601,7 @@ async function pollSessions() {
         `${fmt(p.seen || 0)} / ${fmt(p.users || 0)} users found`;
       if (status.state !== "loading") {
         if (status.state === "error") showSessionsError("Reading sessions failed: " + status.error);
-        else { S.ls.page = 1; await querySessions(); }
+        else { S.ls.page = 1; refreshPanels(); await querySessions(); }
         break;
       }
       await new Promise(r => setTimeout(r, 1000));
@@ -1373,8 +1629,6 @@ async function querySessions() {
 }
 
 const requerySessions = () => { if (S.ls.data) { S.ls.page = 1; querySessions(); } };
-for (const id of ["#ls-profile", "#ls-manager", "#ls-state"]) $(id).addEventListener("change", requerySessions);
-$("#ls-search").addEventListener("input", debounce(requerySessions, 300));
 $("#ls-prev").addEventListener("click", () => { S.ls.page--; querySessions(); });
 $("#ls-next").addEventListener("click", () => { S.ls.page++; querySessions(); });
 

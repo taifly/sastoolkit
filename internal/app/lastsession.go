@@ -166,6 +166,7 @@ type LastSessions struct {
 	progress     M
 	stopped      any // why the scan ended
 	scannedAt    any
+	stopReasons  []string // distinct, for the filter's choices
 }
 
 func NewLastSessions(client *sas4.Client, pageSize int) *LastSessions {
@@ -191,7 +192,8 @@ func (l *LastSessions) Status() M {
 	defer l.mu.RUnlock()
 	return M{"state": l.state, "error": l.err,
 		"lookback_days": l.lookbackDays, "progress": val.Copy(l.progress),
-		"stopped": l.stopped, "scanned_at": l.scannedAt}
+		"stopped": l.stopped, "scanned_at": l.scannedAt,
+		"stop_reasons": append([]string{}, l.stopReasons...)}
 }
 
 func (l *LastSessions) Refresh(usernames map[string]M, lookbackDays int) {
@@ -271,6 +273,17 @@ func (l *LastSessions) scan(wanted map[string]bool) {
 		return
 	}
 	l.byUsername = found
+	reasons := map[string]bool{}
+	for _, session := range found {
+		if r := val.Str(session["terminate_cause"]); r != "" {
+			reasons[r] = true
+		}
+	}
+	l.stopReasons = make([]string, 0, len(reasons))
+	for r := range reasons {
+		l.stopReasons = append(l.stopReasons, r)
+	}
+	sort.Strings(l.stopReasons)
 	l.stopped = stopped
 	l.scannedAt = now.Format("2006-01-02 15:04:05")
 	l.state = "ready"
