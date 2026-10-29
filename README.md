@@ -1,3 +1,5 @@
+<p align="center"><img src="logo.jpeg" alt="SAS toolkit logo" width="160"></p>
+
 # SAS toolkit
 
 A desktop app for bulk actions over the SAS4 admin API. It opens in its own
